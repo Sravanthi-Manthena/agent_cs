@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAP Service Desk Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f4f4f9;
+        }
+ 
+        .chat-container {
+            width: 400px;
+            height: 500px;
+            border: 1px solid #ddd;
+            background-color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+ 
+        .chat-box {
+            padding: 15px;
+            overflow-y: auto;
+            flex-grow: 1;
+            max-height: 80%;
+            border-bottom: 1px solid #ddd;
+        }
+ 
+        .chat-input {
+            display: flex;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-bottom-left-radius: 8px;
+            border-bottom-right-radius: 8px;
+        }
+ 
+        #userInput {
+            width: 80%;
+            padding: 12px;
+            margin-right: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+ 
+        button {
+            padding: 12px 20px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+ 
+        button:hover {
+            background-color: #0056b3;
+        }
+ 
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+ 
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 8px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+ 
+        .agent {
+            background-color: #e1f5fe;
+            text-align: left;
+            margin-right: auto;
+            color: #0d47a1;
+        }
+ 
+        .user {
+            background-color: #e8f7e9;
+            text-align: right;
+            margin-left: auto;
+            color: #1b5e20;
+        }
+ 
+        .ticket-details {
+            white-space: pre-wrap;
+            font-family: monospace;
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+ 
+        .button-container {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            gap: 10px;
+        }
+ 
+        .button-container button {
+            width: 48%;
+            font-size: 14px;
+        }
+ 
+        .typing-indicator {
+            padding: 10px;
+            color: #666;
+            font-style: italic;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div id="chatBox" class="chat-box"></div>
+        <div class="typing-indicator" id="typingIndicator">Amelia is typing...</div>
+        <div class="chat-input">
+            <input type="text" id="userInput" placeholder="Type your question..." onkeypress="handleKeyPress(event)"/>
+            <button onclick="sendMessage()" id="sendButton">Send</button>
+        </div>
+    </div>
+ 
+    <script>
+        let chatBox = document.getElementById("chatBox");
+        let awaitingResolution = false;
+        let awaitingTicketConfirmation = false;
+        let ticketDetails = null;
+        let sendButton = document.getElementById("sendButton");
+        let userInput = document.getElementById("userInput");
+        let typingIndicator = document.getElementById("typingIndicator");
+        let ticketCreated = false;
+        window.awaitingFieldUpdates = false;
+ 
+        function showTypingIndicator() {
+            typingIndicator.style.display = "block";
+            sendButton.disabled = true;
+            userInput.disabled = true;
+        }
+ 
+        function hideTypingIndicator() {
+            typingIndicator.style.display = "none";
+            sendButton.disabled = false;
+            userInput.disabled = false;
+        }
+ 
+        function handleKeyPress(event) {
+            if (event.key === "Enter") {
+                sendMessage();
+            }
+        }
+ 
+        function appendMessage(message, sender) {
+            let messageDiv = document.createElement("div");
+            messageDiv.classList.add("message", sender);
+            messageDiv.innerText = message;
+            chatBox.appendChild(messageDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+ 
+        function appendButtons() {
+            let buttonContainer = document.createElement("div");
+            buttonContainer.classList.add("button-container");
+ 
+            let createTicketButton = document.createElement("button");
+            createTicketButton.innerText = "Create Ticket";
+            createTicketButton.onclick = createTicket;
+ 
+            let changeFieldsButton = document.createElement("button");
+            changeFieldsButton.innerText = "Change Fields";
+            changeFieldsButton.onclick = changeTicketFields;
+ 
+            buttonContainer.appendChild(createTicketButton);
+            buttonContainer.appendChild(changeFieldsButton);
+ 
+            chatBox.appendChild(buttonContainer);
+        }
+ 
+        async function sendMessage() {
+            if (window.awaitingFieldUpdates) {
+                await handleFieldUpdates();
+                window.awaitingFieldUpdates = false;
+                return;
+            }
+ 
+            let userInputValue = document.getElementById("userInput").value.trim();
+            if (!userInputValue) return;
+ 
+            appendMessage(userInputValue, "user");
+            document.getElementById("userInput").value = "";
+            showTypingIndicator();
+ 
+            try {
+                if (awaitingResolution) {
+                    await handleResolution(userInputValue);
+                } else if (awaitingTicketConfirmation) {
+                    await handleTicketConfirmation(userInputValue);
+                } else {
+                    await handleNormalMessage(userInputValue);
+                }
+            } catch (error) {
+                console.error("Error:", error);
+                appendMessage("Sorry, there was an error processing your request. Please try again.", "agent");
+            } finally {
+                hideTypingIndicator();
+            }
+        }
+ 
+        async function handleNormalMessage(userInput) {
+            try {
+                let response = await fetch('/start_conversation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_input: userInput,
+                        conversation_started: true
+                    })
+                });
+ 
+                let data = await response.json();
+ 
+                if (data.greeting_message) {
+                    appendMessage(data.greeting_message, "agent");
+                }
+ 
+                if (data.solution) {
+                    appendMessage(data.solution, "agent");
+                }
+ 
+                if (data.resolved_question) {
+                    awaitingResolution = true;
+                    appendMessage(data.resolved_question, "agent");
+                    document.getElementById("userInput").setAttribute("placeholder", "Please answer 'yes' or 'no'");
+                }
+ 
+            } catch (error) {
+                throw error;
+            }
+        }
+ 
+        async function handleResolution(userInput) {
+            try {
+                let response = await fetch('/resolve_issue', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ user_input: userInput })
+                });
+ 
+                let data = await response.json();
+                appendMessage(data.solution, "agent");
+ 
+                if (data.solution.includes("Would you like me to raise a ticket for you?")) {
+                    awaitingResolution = false;
+                    awaitingTicketConfirmation = true;
+                    document.getElementById("userInput").setAttribute("placeholder", "Please answer 'yes' or 'no'");
+                }
+ 
+            } catch (error) {
+                throw error;
+            }
+        }
+ 
+        async function handleTicketConfirmation(userInput) {
+            try {
+                if (userInput.toLowerCase() === "yes") {
+                    let response = await fetch('/confirm_ticket', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ user_input: userInput })
+                    });
+ 
+                    let data = await response.json();
+                   
+                    if (data.error) {
+                        appendMessage(`Error creating ticket: ${data.error}`, "agent");
+                    } else {
+                        ticketDetails = data.ticket_details;
+                        appendMessage("Please confirm the ticket details:", "agent");
+                        const formattedDetails = formatTicketDetails(ticketDetails);
+                        appendMessage(formattedDetails, "agent");
+                        appendButtons();
+                    }
+ 
+                    awaitingTicketConfirmation = false;
+                    document.getElementById("userInput").setAttribute("placeholder", "Type your question...");
+                } else if (userInput.toLowerCase() === "no") {
+                    appendMessage("Ticket creation cancelled. How else can I assist you?", "agent");
+                    awaitingTicketConfirmation = false;
+                    document.getElementById("userInput").setAttribute("placeholder", "Type your question...");
+                } else {
+                    appendMessage("Please confirm with 'yes' or 'no'.", "agent");
+                }
+            } catch (error) {
+                throw error;
+            }
+        }
+ 
+        function formatTicketDetails(details) {
+            return `Ticket Details:
+           
+Ticket ID: ${details.ticket_id || 'Not assigned yet'}
+Ticket Name: ${details.ticket_name}
+Description: ${details.ticket_description}
+Type: ${details.ticket_type}
+Module: ${details.module}
+Priority: ${details.priority}
+Category: ${details.category}
+Status: ${details.status}`;
+        }
+ 
+        function createTicket() {
+            if (ticketCreated) {
+                appendMessage("A ticket has already been created for this issue.", "agent");
+                return;
+            }
+ 
+            appendMessage("Creating your ticket...", "agent");
+            showTypingIndicator();
+           
+            fetch('/confirm_ticket', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ user_input: "yes" })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    appendMessage(`Error creating ticket: ${data.error}`, "agent");
+                } else {
+                    ticketCreated = true;
+                    const formattedDetails = formatTicketDetails(data.ticket_details);
+                    appendMessage("Ticket created successfully!", "agent");
+                    appendMessage(formattedDetails, "agent");
+                    appendMessage("Thank you for using our service. Chat will close in 5 seconds.", "agent");
+                    setTimeout(() => {
+                        window.close();
+                    }, 5000);
+                }
+                hideTypingIndicator();
+            })
+            .catch(error => {
+                console.error("Error:", error);
+                appendMessage("Error occurred while creating the ticket. Please try again.", "agent");
+                hideTypingIndicator();
+            });
+        }
+ 
+        function changeTicketFields() {
+            appendMessage("Please specify which fields you would like to update in this format:", "agent");
+            appendMessage("Field: New Value (Example: 'priority: High, module: Sales')", "agent");
+            document.getElementById("userInput").setAttribute("placeholder", "Enter field updates...");
+            window.awaitingFieldUpdates = true;
+        }
+ 
+        async function handleFieldUpdates() {
+            let userInputValue = document.getElementById("userInput").value.trim();
+            if (!userInputValue) return;
+ 
+            appendMessage(userInputValue, "user");
+            document.getElementById("userInput").value = "";
+            showTypingIndicator();
+ 
+            try {
+                let response = await fetch('/change-the-information', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        updates: parseUpdates(userInputValue),
+                        ticket_id: ticketDetails?.ticket_id
+                    })
+                });
+ 
+                let data = await response.json();
+ 
+                if (data.success) {
+                    appendMessage("Ticket information updated successfully!", "agent");
+                    ticketDetails = data.ticket_details;
+                    const formattedDetails = formatTicketDetails(data.ticket_details);
+                    appendMessage(formattedDetails, "agent");
+                    appendButtons();
+                } else {
+                    appendMessage(`Failed to update ticket: ${data.message}`, "agent");
+                }
+            } catch (error) {
+                console.error("Error:", error);
+                appendMessage("An error occurred while updating the ticket information. Please try again.", "agent");
+            } finally {
+                hideTypingIndicator();
+                document.getElementById("userInput").setAttribute("placeholder", "Type your question...");
+            }
+        }
+ 
+        function parseUpdates(input) {
+            const updates = {};
+            const pairs = input.split(',').map(pair => pair.trim());
+           
+            pairs.forEach(pair => {
+                const [field, value] = pair.split(':').map(str => str.trim());
+                if (field && value) {
+                    updates[field.toLowerCase()] = value;
+                }
+            });
+           
+            return updates;
+        }
+ 
+        async function startConversation() {
+            try {
+                showTypingIndicator();
+                let response = await fetch('/start_conversation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_input: "",
+                        conversation_started: false
+                    })
+                });
+ 
+                let data = await response.json();
+                if (data.greeting_message) {
+                    appendMessage(data.greeting_message, "agent");
+                }
+            } catch (error) {
+                console.error("Error starting conversation:", error);
+                appendMessage("Error occurred. Please refresh the page.", "agent");
+            } finally {
+                hideTypingIndicator();
+            }
+        }
+ 
+        startConversation();
+    </script>
+</body>
+</html>
