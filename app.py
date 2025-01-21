@@ -1,9 +1,10 @@
 from flask import Flask, request, jsonify, session, render_template
 from ticket_service import get_answer_from_query,generate_user_id, generate_ticket_id, predict_and_parse_sap_error_details, ticket_info, extract_details_from_input
-
-from datetime import datetime
+from flask_cors import CORS
  
+from datetime import datetime
 app = Flask(__name__)
+CORS(app)
 app.secret_key = 'your_secret_key'  # Change this to a secure secret key
 
  
